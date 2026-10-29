@@ -858,19 +858,23 @@ fn toggle_sheet(sheets: &mut Vec<String>, targets: &[String], name: &str, on: bo
 }
 
 /// Drop the ticked sheets that no longer exist (`targets` lists those that do). With none left,
-/// `target` is the one; with exactly one left, that one is the target, which the dialog then edits
-/// and OK plots. Returns whether the target changed.
-fn sync_sheets(sheets: &mut Vec<String>, target: &mut String, targets: &[String]) -> bool {
+/// the target (or `fallback`, if that one is gone too) is the one. The target is always one of the
+/// ticked sheets: it is the sheet whose settings the dialog edits and previews, and the one OK
+/// plots when it is the only one. Returns whether the target changed.
+fn sync_sheets(sheets: &mut Vec<String>, target: &mut String, targets: &[String], fallback: &str) -> bool {
     sheets.retain(|n| targets.contains(n));
     if sheets.is_empty() {
-        sheets.push(target.clone());
+        sheets.push(if targets.contains(target) { target.clone() } else { fallback.to_string() });
     }
-    match sheets.as_slice() {
-        [only] if only != target => {
-            *target = only.clone();
+    if sheets.contains(target) {
+        return false;
+    }
+    match sheets.first() {
+        Some(first) => {
+            *target = first.clone();
             true
         }
-        _ => false,
+        None => false,
     }
 }
 
@@ -961,7 +965,8 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     layouts.sort_by_key(|l| l.0);
     targets.extend(layouts.into_iter().map(|l| l.1));
     let generation = PLOT_GEN.load(Ordering::Relaxed);
-    let mut st = temp::<PlotState>(ctx, "plot_state").filter(|s| s.generation == generation && targets.contains(&s.target)).unwrap_or_else(|| {
+    // A state whose target layout was deleted is kept: `sync_sheets` drops only that sheet.
+    let mut st = temp::<PlotState>(ctx, "plot_state").filter(|s| s.generation == generation).unwrap_or_else(|| {
         let target = app.session.layout_space().tab_name().to_string();
         let mut ext = d.extents(&cadcraft_doc::Space::Model);
         if ext.is_empty() {
@@ -978,7 +983,8 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
         }
     });
     // Layouts deleted since the dialog was last open drop out of the ticked sheets.
-    if sync_sheets(&mut st.sheets, &mut st.target, &targets) {
+    let current = app.session.layout_space().tab_name().to_string();
+    if sync_sheets(&mut st.sheets, &mut st.target, &targets, &current) {
         st.page = plot_page(d, &st.target);
     }
     let model = st.target == "Model";
@@ -1023,12 +1029,9 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                     let mut on = st.sheets.contains(n);
                     if ui.checkbox(&mut on, n).changed() {
                         toggle_sheet(&mut st.sheets, &targets, n, on);
-                        // One sheet left: it is the one whose settings the dialog edits.
-                        if let [only] = st.sheets.as_slice()
-                            && *only != st.target
-                        {
-                            st.page = plot_page(d, only);
-                            st.target = only.clone();
+                        // The target stays one of the ticked sheets: the dialog edits and previews it.
+                        if sync_sheets(&mut st.sheets, &mut st.target, &targets, &current) {
+                            st.page = plot_page(d, &st.target);
                         }
                     }
                 }
@@ -1380,21 +1383,30 @@ mod plot_sheets_tests {
     fn deleted_sheets_drop_out_and_a_single_sheet_left_is_the_target() {
         let t = targets();
         let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        // Nothing deleted: nothing changes, whatever the target (it may have been unticked).
+        // Nothing deleted, but the target was unticked: the first ticked sheet becomes the target,
+        // so the dialog edits and previews a sheet that is in the PDF.
         let (mut sheets, mut target) = (names(&["Layout1", "Layout2"]), "Sheet 3".to_string());
-        assert!(!sync_sheets(&mut sheets, &mut target, &t));
-        assert_eq!((sheets.as_slice(), target.as_str()), (names(&["Layout1", "Layout2"]).as_slice(), "Sheet 3"));
+        assert!(sync_sheets(&mut sheets, &mut target, &t, "Layout1"));
+        assert_eq!((sheets.as_slice(), target.as_str()), (names(&["Layout1", "Layout2"]).as_slice(), "Layout1"));
+        // The target itself was deleted: the surviving ticked sheets stay, one of them is the target.
+        let (mut sheets, mut target) = (names(&["Gone", "Layout1", "Layout2"]), "Gone".to_string());
+        assert!(sync_sheets(&mut sheets, &mut target, &t, "Sheet 3"));
+        assert_eq!((sheets.as_slice(), target.as_str()), (names(&["Layout1", "Layout2"]).as_slice(), "Layout1"));
+        // Everything ticked was deleted, the target too: the fallback (the current tab) is the sheet.
+        let (mut sheets, mut target) = (names(&["Gone"]), "Gone".to_string());
+        assert!(sync_sheets(&mut sheets, &mut target, &t, "Sheet 3"));
+        assert_eq!((sheets, target.as_str()), (names(&["Sheet 3"]), "Sheet 3"));
         // One of three ticked layouts is deleted while the target was not among them: two are left.
         let (mut sheets, mut target) = (names(&["Layout1", "Gone", "Layout2"]), "Sheet 3".to_string());
-        assert!(!sync_sheets(&mut sheets, &mut target, &t));
-        assert_eq!(sheets, ["Layout1", "Layout2"]);
+        assert!(sync_sheets(&mut sheets, &mut target, &t, "Layout1"), "an unticked target moves to a ticked sheet");
+        assert_eq!((sheets.as_slice(), target.as_str()), (names(&["Layout1", "Layout2"]).as_slice(), "Layout1"));
         // One left: it becomes the target, so the dialog's single sheet is what OK plots.
         let (mut sheets, mut target) = (names(&["Gone", "Layout2"]), "Layout1".to_string());
-        assert!(sync_sheets(&mut sheets, &mut target, &t));
+        assert!(sync_sheets(&mut sheets, &mut target, &t, "Layout1"));
         assert_eq!((sheets, target.as_str()), (names(&["Layout2"]), "Layout2"));
         // None left: the target alone.
         let (mut sheets, mut target) = (names(&["Gone", "Also gone"]), "Layout1".to_string());
-        assert!(!sync_sheets(&mut sheets, &mut target, &t));
+        assert!(!sync_sheets(&mut sheets, &mut target, &t, "Layout1"));
         assert_eq!((sheets, target.as_str()), (names(&["Layout1"]), "Layout1"));
     }
     /// Ticking keeps tab order and leaves at least one sheet.
