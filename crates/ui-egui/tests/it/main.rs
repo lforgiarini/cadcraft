@@ -24,6 +24,7 @@ mod native_windows;
 mod options_dialog;
 mod parameters_rename;
 mod pickdrag;
+mod preview_zoom;
 mod properties_units;
 mod rapid_clicks;
 mod selection_cycling;
