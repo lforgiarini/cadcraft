@@ -211,6 +211,18 @@ fn pagesetup_for_several_layouts_is_all_or_nothing() {
     assert_eq!(before, after, "a refused change leaves every layout as it was");
 }
 
+/// A change a later layout refuses also undoes the layouts already changed.
+#[test]
+fn pagesetup_for_several_layouts_rolls_back_a_partial_change() {
+    let mut s = Session::new();
+    // Layout1 already stores the extents area, so it takes `extents`; Layout2 does not.
+    s.doc_mut().unwrap().layouts.iter_mut().find(|l| l.name == "Layout1").unwrap().page.plot_area = "extents".into();
+    let before: Vec<String> = ["Layout1", "Layout2"].iter().map(|n| paper_of(&s, n)).collect();
+    let r = s.execute("pagesetup", &json!({"layouts": ["Layout1", "Layout2"], "paper": "A3", "plotArea": "extents"}));
+    assert!(r.is_err(), "Layout2 refuses the extents area");
+    let after: Vec<String> = ["Layout1", "Layout2"].iter().map(|n| paper_of(&s, n)).collect();
+    assert_eq!(before, after, "Layout1 is back as it was after Layout2 refused");
+}
 #[test]
 fn pagesetup_paper_table() {
     let mut s = Session::new();

@@ -497,6 +497,8 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
     if !picked.contains(&sel) {
         picked = vec![sel.clone()];
     }
+    // Where a Shift-click's range starts: the last layout clicked without Shift.
+    let mut anchor = temp::<String>(ctx, "pagesetup_anchor").filter(|a| layouts.iter().any(|l| l.1 == *a)).unwrap_or_else(|| sel.clone());
     let mut action = None;
     let choices = PageChoices::new(ctx, d);
     egui::Window::new("Page Setup Manager").open(open).default_size(vec2(560.0, 300.0)).resizable(true).show(ctx, |ui| {
@@ -512,7 +514,7 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
                     let resp = ui.selectable_label(picked.contains(name), name);
                     if resp.clicked() {
                         let order: Vec<&str> = layouts.iter().map(|l| l.1.as_str()).collect();
-                        click_layout(&mut picked, &mut sel, &order, name, ui.input(|i| i.modifiers));
+                        click_layout(&mut picked, &mut sel, &mut anchor, &order, name, ui.input(|i| i.modifiers));
                     }
                 }
             });
@@ -537,20 +539,23 @@ fn page_setup(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action 
             right.label(RichText::new(format!("{w:.1} × {h:.1} mm")).color(t.text_dim));
         });
     });
+    set_temp(ctx, "pagesetup_anchor", anchor);
     set_temp(ctx, "pagesetup_sel", sel);
     set_temp(ctx, "pagesetup_picked", picked);
     action
 }
 
 /// A click on layout `name` in the Page Setup Manager's list: Ctrl (or Cmd) adds or removes it,
-/// Shift picks the range from the layout shown to it, a plain click picks just that one. `sel` is
-/// the layout whose settings are shown, `order` the layouts in tab order.
-fn click_layout(picked: &mut Vec<String>, sel: &mut String, order: &[&str], name: &str, modifiers: egui::Modifiers) {
+/// Shift picks the range from the last plain or Ctrl-clicked layout (`anchor`) to it, a plain click
+/// picks just that one. `sel` is the layout whose settings are shown, `order` the layouts in tab order.
+fn click_layout(picked: &mut Vec<String>, sel: &mut String, anchor: &mut String, order: &[&str], name: &str, modifiers: egui::Modifiers) {
     if modifiers.shift {
-        let (a, b) = (order.iter().position(|n| *n == sel.as_str()), order.iter().position(|n| *n == name));
+        let (a, b) = (order.iter().position(|n| *n == anchor.as_str()), order.iter().position(|n| *n == name));
         if let (Some(a), Some(b)) = (a, b) {
             let (lo, hi) = (a.min(b), a.max(b));
             *picked = order.get(lo..=hi).unwrap_or_default().iter().map(|n| n.to_string()).collect();
+            // The layout clicked last is the one whose settings are shown, as for any click.
+            *sel = name.to_string();
         }
     } else if modifiers.command || modifiers.ctrl {
         if let Some(i) = picked.iter().position(|n| n == name) {
@@ -568,6 +573,10 @@ fn click_layout(picked: &mut Vec<String>, sel: &mut String, order: &[&str], name
     } else {
         *picked = vec![name.to_string()];
         *sel = name.to_string();
+    }
+    // A click without Shift starts the next Shift range.
+    if !modifiers.shift {
+        *anchor = sel.clone();
     }
 }
 
@@ -1340,38 +1349,44 @@ mod page_setup_selection_tests {
         // Synthetic and some platforms' key events set `ctrl` without `command`.
         let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
         let (mut picked, mut sel) = (vec!["Layout1".to_string()], "Layout1".to_string());
-        click_layout(&mut picked, &mut sel, &ORDER, "Sheet 3", ctrl);
+        let mut anchor = sel.clone();
+        click_layout(&mut picked, &mut sel, &mut anchor, &ORDER, "Sheet 3", ctrl);
         assert_eq!(picked, ["Layout1", "Sheet 3"]);
     }
 
     /// A click on layout `name` with modifiers `m`.
-    fn click(picked: &mut Vec<String>, sel: &mut String, name: &str, m: egui::Modifiers) {
-        click_layout(picked, sel, &ORDER, name, m);
+    fn click(picked: &mut Vec<String>, sel: &mut String, anchor: &mut String, name: &str, m: egui::Modifiers) {
+        click_layout(picked, sel, anchor, &ORDER, name, m);
     }
 
     /// Plain, Ctrl and Shift clicks pick one, toggle, and take a range.
     #[test]
     fn click_picks_one_ctrl_toggles_shift_takes_a_range() {
         let (mut picked, mut sel) = (vec!["Layout1".to_string()], "Layout1".to_string());
-        click(&mut picked, &mut sel, "Sheet 3", mods(false, false));
+        let mut anchor = sel.clone();
+        click(&mut picked, &mut sel, &mut anchor, "Sheet 3", mods(false, false));
         assert_eq!((picked.as_slice(), sel.as_str()), (&["Sheet 3".to_string()][..], "Sheet 3"));
         // Ctrl adds and shows the one just added.
-        click(&mut picked, &mut sel, "Layout1", mods(false, true));
-        click(&mut picked, &mut sel, "Sheet 5", mods(false, true));
+        click(&mut picked, &mut sel, &mut anchor, "Layout1", mods(false, true));
+        click(&mut picked, &mut sel, &mut anchor, "Sheet 5", mods(false, true));
         assert_eq!(picked, ["Sheet 3", "Layout1", "Sheet 5"]);
         assert_eq!(sel, "Sheet 5");
         // Ctrl on a picked layout removes it; the shown one moves to another picked.
-        click(&mut picked, &mut sel, "Sheet 5", mods(false, true));
+        click(&mut picked, &mut sel, &mut anchor, "Sheet 5", mods(false, true));
         assert_eq!((picked.as_slice(), sel.as_str()), (&["Sheet 3".to_string(), "Layout1".to_string()][..], "Layout1"));
         // The last picked layout can't be removed.
-        click(&mut picked, &mut sel, "Layout1", mods(false, true));
-        click(&mut picked, &mut sel, "Sheet 3", mods(false, true));
+        click(&mut picked, &mut sel, &mut anchor, "Layout1", mods(false, true));
+        click(&mut picked, &mut sel, &mut anchor, "Sheet 3", mods(false, true));
         assert_eq!(picked, ["Sheet 3"], "{picked:?}");
         // Shift takes the range from the shown layout, in tab order, whichever way it goes.
-        click(&mut picked, &mut sel, "Sheet 5", mods(true, false));
+        click(&mut picked, &mut sel, &mut anchor, "Sheet 5", mods(true, false));
         assert_eq!(picked, ["Sheet 3", "Sheet 4", "Sheet 5"]);
-        click(&mut picked, &mut sel, "Layout2", mods(true, false));
-        assert_eq!(picked, ["Layout2", "Sheet 3"], "from the shown layout (Sheet 3) back to Layout2");
+        click(&mut picked, &mut sel, &mut anchor, "Layout2", mods(true, false));
+        assert_eq!(picked, ["Layout2", "Sheet 3"], "from the layout last clicked without Shift (Sheet 3) back to Layout2");
+        // The layout clicked last is the one shown, and the next range still starts at Sheet 3.
+        assert_eq!(sel, "Layout2");
+        click(&mut picked, &mut sel, &mut anchor, "Sheet 4", mods(true, false));
+        assert_eq!((picked.as_slice(), sel.as_str()), (&["Sheet 3".to_string(), "Sheet 4".to_string()][..], "Sheet 4"));
     }
 
     /// A change for several picked layouts is one `pagesetup` with `layouts`.
