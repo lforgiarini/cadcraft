@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("preview", "Plot Preview", run_preview)
             .menu(&["File", "Plot Preview"])
             .alias(&["pre"])
-            .params("{layout?: current|\"Model\", paper?, landscape?, fit?, scale?, lineweights?, plotTransparency?, width?: pixels (default 1200)} → {data: base64 PNG, width, height, layout, paper}")
+            .params("{layout?: current|\"Model\", paper?, landscape?, fit?, scale?, lineweights?, plotTransparency?, plotStyleTable?: table name or \"None\" (default: the page setup's), width?: pixels (default 1200)} → {data: base64 PNG, width, height, layout, paper}")
             .noundo(),
         CommandSpec::new("publish", "Batch Publish...", run_publish)
             .menu(&["File", "Batch Publish..."])

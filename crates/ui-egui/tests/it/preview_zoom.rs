@@ -30,6 +30,7 @@ fn plots() -> Vec<Value> {
 /// Zooming in draws the part in view again at the screen's resolution.
 #[test]
 fn zooming_in_draws_the_part_in_view_at_the_screens_resolution() {
+    let _preview = crate::PLOT_PREVIEW.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     set_io(IoHooks { read: |_, _| Err("no".into()), write: |_, _| Err("no".into()), plot: Some(recording_plot) });
     let mut app = CadApp::new(Session::default(), Services::default());
     app.ui.start_tab = false;
