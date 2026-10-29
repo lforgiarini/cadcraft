@@ -210,6 +210,18 @@ fn cancelling_new_layout_puts_the_tab_back() {
     assert_eq!(s.space(), Space::Paper("Layout2".into()));
 }
 
+/// Esc after the user chose another tab leaves that tab shown, not the one the command started in.
+#[test]
+fn cancelling_new_layout_keeps_a_tab_chosen_meanwhile() {
+    let mut s = session_with_model();
+    s.execute("layout.set", &json!({"name": "Layout2"})).unwrap();
+    s.start("layout.new").unwrap();
+    s.cmdline("Sheet K").unwrap();
+    s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+    s.cancel();
+    assert!(s.running.is_none());
+    assert_eq!(s.space(), Space::Paper("Layout1".into()), "the tab chosen meanwhile stays: {:?}", s.log);
+}
 #[test]
 fn mview_arrangements_and_interactive() {
     let mut s = session_with_model();

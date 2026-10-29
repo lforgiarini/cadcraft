@@ -285,7 +285,9 @@ impl Interactive for NewLayoutM {
     }
     /// Puts back the tab the command started in.
     fn cancelled(&mut self, s: &mut Session) {
+        // Only if the Model tab is still shown: a tab the user chose since is left alone.
         if let Some(from) = self.from.take()
+            && s.layout_space() == Space::Model
             && let Err(e) = Self::show(s, &from)
         {
             s.echo(e.to_string());
